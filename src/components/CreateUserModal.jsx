@@ -1,240 +1,271 @@
 import React, { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"; // Using shadcn Select
 import { toast } from '@/components/ui/use-toast';
-import { Loader2 } from 'lucide-react';
-import { getIdToken } from 'firebase/auth'; // To get token for Cloud Function call
+import { Loader2 } from 'lucide-react'; // Import Loader
 
-// Define available roles based on who is creating
-const getAvailableRoles = (currentUserRole) => {
+// Firebase Imports (Only needed for Auth Token)
+import { getAuth, getIdToken } from 'firebase/auth';
+
+// --- Netlify Function URL ---
+// Replace this with the actual URL provided by Netlify after deployment
+// It will look like: https://your-site-name.netlify.app/.netlify/functions/createUser
+const CREATE_USER_FUNCTION_URL = '/.netlify/functions/createUser'; // Use relative path for same-site deployment
+
+
+const CreateUserModal = ({ isOpen, onOpenChange, projects, currentUserRole }) => { // Pass currentUserRole
+  const [formData, setFormData] = useState({
+    email: '',
+    password: '',
+    confirmPassword: '',
+    role: '', // Default role based on creator later
+    firstName: '',
+    lastName: '',
+    designation: '',
+    dailyRate: 0,
+    department: '',
+    contactNumber: '',
+    projectId: '', // Only for Field Employee
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  const [availableRoles, setAvailableRoles] = useState([]);
+
+  // Determine which roles the current user can create
+  useEffect(() => {
+    let roles = [];
     if (currentUserRole === 'Admin') {
-        return ['Manager', 'Office Staff', 'Field Employee'];
+      roles = ['Admin', 'Manager', 'Field Employee', 'Office Staff'];
+    } else if (currentUserRole === 'Manager') {
+      roles = ['Field Employee'];
     }
-    if (currentUserRole === 'Manager') {
-        return ['Field Employee'];
-    }
-    return []; // No creation allowed for other roles
-};
-
-// --- !! IMPORTANT !! ---
-// Replace with your actual Cloud Function URL after deployment
-const CREATE_USER_FUNCTION_URL = 'YOUR_CLOUD_FUNCTION_URL_HERE/createUser';
-// Example: 'https://us-central1-your-project-id.cloudfunctions.net/createUser'
+    setAvailableRoles(roles);
+    // Set default role selection if possible
+    setFormData(prev => ({ ...prev, role: roles.length > 0 ? roles[0] : '' }));
+  }, [currentUserRole, isOpen]); // Rerun when modal opens or role changes
 
 
-const CreateUserModal = ({ isOpen, onOpenChange, currentUserRole, projects, auth }) => {
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [selectedRole, setSelectedRole] = useState('');
-    const [selectedProjectId, setSelectedProjectId] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
+  // Reset form when modal closes or opens
+  useEffect(() => {
+      if (!isOpen) {
+        // Reset form completely when closed
+        setFormData({
+            email: '', password: '', confirmPassword: '', role: '',
+            firstName: '', lastName: '', designation: '', dailyRate: 0,
+            department: '', contactNumber: '', projectId: '',
+        });
+        // Reset role based on available roles when opening
+      } else if (availableRoles.length > 0) {
+           setFormData(prev => ({ ...prev, role: availableRoles[0] }));
+           // Set default project if field worker is default and projects exist
+           if (availableRoles[0] === 'Field Employee' && projects && projects.length > 0) {
+                setFormData(prev => ({ ...prev, projectId: projects[0].id }));
+           } else {
+               setFormData(prev => ({ ...prev, projectId: '' }));
+           }
+      }
+  }, [isOpen, availableRoles, projects]); // Added projects dependency
 
-     // Employee Details (mirroring HR modal)
-     const [firstName, setFirstName] = useState('');
-     const [lastName, setLastName] = useState('');
-     const [designation, setDesignation] = useState('');
-     const [dailyRate, setDailyRate] = useState('');
-     // Add other fields as needed (department, contactNumber etc.)
+  const handleInputChange = (e) => {
+    const { id, value } = e.target;
+    setFormData(prev => ({ ...prev, [id]: value }));
+
+     // Reset projectId if role changes away from Field Employee
+     if (id === 'role' && value !== 'Field Employee') {
+       setFormData(prev => ({ ...prev, projectId: '' }));
+     }
+     // Set default project if role changes TO Field Employee and projects exist
+     else if (id === 'role' && value === 'Field Employee' && projects && projects.length > 0) {
+        setFormData(prev => ({ ...prev, projectId: projects[0].id }));
+     }
+  };
+
+  const handleSave = async (e) => {
+     e.preventDefault(); // Prevent default form submission
+     setIsLoading(true);
+
+     // --- Basic Validation ---
+     if (!formData.email || !formData.password || !formData.role || !formData.firstName || !formData.lastName || !formData.designation) {
+       toast({ title: "Missing Required Fields", description: "Email, password, role, first/last name, and designation are required.", variant: "destructive" });
+       setIsLoading(false);
+       return;
+     }
+     if (formData.password !== formData.confirmPassword) {
+       toast({ title: "Passwords do not match", variant: "destructive" });
+       setIsLoading(false);
+       return;
+     }
+     if (formData.password.length < 6) {
+        toast({ title: "Password too short", description: "Password must be at least 6 characters.", variant: "destructive" });
+        setIsLoading(false);
+        return;
+     }
+     if (formData.role === 'Field Employee' && !formData.projectId) {
+       toast({ title: "Project Required", description: "Please assign a project for Field Employees.", variant: "destructive" });
+       setIsLoading(false);
+       return;
+     }
+
+     // --- Get Auth Token ---
+     const auth = getAuth();
+     const currentUser = auth.currentUser;
+     let idToken = null;
+     if (currentUser) {
+       try {
+         idToken = await getIdToken(currentUser);
+       } catch (tokenError) {
+         console.error("Error getting ID token:", tokenError);
+         toast({ title: "Authentication Error", description: "Could not verify your session. Please log out and back in.", variant: "destructive" });
+         setIsLoading(false);
+         return;
+       }
+     } else {
+       toast({ title: "Not Authenticated", description: "You must be logged in to create users.", variant: "destructive" });
+       setIsLoading(false);
+       return;
+     }
 
 
-    const availableRoles = getAvailableRoles(currentUserRole);
+     // --- Prepare Data for Function ---
+     const dataToSend = {
+       email: formData.email,
+       password: formData.password,
+       role: formData.role,
+       firstName: formData.firstName,
+       lastName: formData.lastName,
+       designation: formData.designation,
+       dailyRate: Number(formData.dailyRate) || 0,
+       department: formData.department || null,
+       contactNumber: formData.contactNumber || null,
+       projectId: formData.role === 'Field Employee' ? formData.projectId : null,
+     };
 
-    useEffect(() => {
-        // Reset form when modal opens or role changes
-        if (isOpen) {
-            setEmail('');
-            setPassword('');
-            setConfirmPassword('');
-             // Set default role based on availability
-             setSelectedRole(availableRoles.length > 0 ? availableRoles[0] : '');
-            setSelectedProjectId(projects.length > 0 ? projects[0].id : ''); // Default project
-             // Reset employee details
-             setFirstName('');
-             setLastName('');
-             setDesignation('');
-             setDailyRate('');
-            setIsSubmitting(false);
-        }
-    }, [isOpen, currentUserRole, projects, availableRoles]); // Added availableRoles
+     // --- Call Netlify Function ---
+     try {
+       const response = await fetch(CREATE_USER_FUNCTION_URL, {
+         method: 'POST',
+         headers: {
+           'Content-Type': 'application/json',
+           'Authorization': `Bearer ${idToken}`,
+         },
+         body: JSON.stringify(dataToSend),
+       });
 
-    const handleCreate = async () => {
-        // Validation
-        if (!email || !password || !selectedRole || !firstName || !lastName || !designation) {
-            toast({ title: "Missing Fields", description: "Please fill in Email, Password, Role, First Name, Last Name, and Designation.", variant: "destructive" });
-            return;
-        }
-        if (password.length < 6) {
-             toast({ title: "Password Too Short", description: "Password must be at least 6 characters.", variant: "destructive" });
-             return;
-        }
-        if (password !== confirmPassword) {
-            toast({ title: "Passwords Don't Match", variant: "destructive" });
-            return;
-        }
-        if (selectedRole === 'Field Employee' && !selectedProjectId) {
-            toast({ title: "Project Required", description: "Please select a project for the Field Employee.", variant: "destructive" });
-            return;
-        }
+       const result = await response.json();
 
-         // Validate daily rate
-         const rate = parseFloat(dailyRate);
-         if (isNaN(rate) || rate < 0) {
-             toast({ title: "Invalid Daily Rate", description: "Please enter a valid non-negative number for daily rate.", variant: "destructive" });
-             return;
-         }
+       if (!response.ok) {
+         // Use error message from the function if available
+         throw new Error(result.error || `Server responded with status ${response.status}`);
+       }
 
+       toast({ title: "User Created Successfully!", description: result.message });
+       onOpenChange(false); // Close modal on success
 
-        setIsSubmitting(true);
+     } catch (error) {
+       console.error("Error calling createUser function:", error);
+       toast({ title: "Error Creating User", description: error.message, variant: "destructive" });
+     } finally {
+       setIsLoading(false);
+     }
+  };
 
-        try {
-             // Get the current user's ID token to authenticate the Cloud Function call
-             if (!auth.currentUser) {
-                 throw new Error("Not authenticated.");
-             }
-             const idToken = await getIdToken(auth.currentUser);
+  return (
+    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-slate-900 border-indigo-500/30 text-white max-h-[90vh] overflow-y-auto scrollbar-hide sm:max-w-[600px]"> {/* Wider modal */}
+        <DialogHeader>
+          <DialogTitle>Create New User</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSave}> {/* Use form element */}
+          <div className="space-y-4 py-4">
+            {/* Email/Password */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="email" className="text-indigo-300">Email Address *</Label>
+                <Input id="email" type="email" value={formData.email} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" required />
+              </div>
+               <div className="space-y-2">
+                 <Label htmlFor="role" className="text-indigo-300">Role *</Label>
+                 <select id="role" value={formData.role} onChange={handleInputChange} className="w-full bg-slate-800 border border-indigo-500/30 rounded-md p-2 text-white h-10" required disabled={availableRoles.length === 0}>
+                   {availableRoles.length > 0 ? (
+                       availableRoles.map(role => <option key={role} value={role}>{role}</option>)
+                   ) : (
+                       <option>No roles available to create</option>
+                   )}
+                 </select>
+               </div>
+            </div>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               <div className="space-y-2">
+                 <Label htmlFor="password" className="text-indigo-300">Password *</Label>
+                 <Input id="password" type="password" value={formData.password} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" required />
+               </div>
+               <div className="space-y-2">
+                 <Label htmlFor="confirmPassword" className="text-indigo-300">Confirm Password *</Label>
+                 <Input id="confirmPassword" type="password" value={formData.confirmPassword} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" required />
+               </div>
+             </div>
 
-            // Call the Cloud Function
-            const response = await fetch(CREATE_USER_FUNCTION_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}`, // Send token for auth check in function
-                },
-                body: JSON.stringify({
-                    email,
-                    password,
-                    role: selectedRole,
-                    projectId: selectedRole === 'Field Employee' ? selectedProjectId : null,
-                     // Pass employee details
-                     firstName,
-                     lastName,
-                     designation,
-                     dailyRate: rate, // Pass parsed rate
-                     // Add other details like department, contactNumber if you added them to the form
-                }),
-            });
+              {/* Employee Details */}
+               <hr className="border-slate-700 my-4" />
+               <h3 className="text-lg font-semibold text-indigo-300 mb-2">Employee Details</h3>
 
-            const result = await response.json();
-
-            if (!response.ok) {
-                 // Throw error with message from the function if available
-                 throw new Error(result.error || `Request failed with status ${response.status}`);
-            }
-
-            toast({ title: "User Created Successfully! 🎉", description: result.message });
-            onOpenChange(false); // Close modal on success
-
-        } catch (error) {
-            console.error("Error calling createUser function:", error);
-            toast({
-                title: "Failed to Create User",
-                description: error.message || "An unexpected error occurred.",
-                variant: "destructive",
-            });
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
-    return (
-        <Dialog open={isOpen} onOpenChange={onOpenChange}>
-            <DialogContent className="bg-slate-900 border-indigo-500/30 text-white max-h-[90vh] overflow-y-auto scrollbar-hide">
-                <DialogHeader>
-                    <DialogTitle>Create New User</DialogTitle>
-                    <DialogDescription className="text-gray-400">
-                        Enter the details for the new user account. An email and temporary password will be used for their first login.
-                    </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                    {/* Basic Info */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="email" className="text-indigo-300">Email Address</Label>
-                            <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="bg-slate-800 border-indigo-500/30" placeholder="user@example.com" />
-                        </div>
-                        <div className="space-y-2">
-                             <Label htmlFor="role" className="text-indigo-300">Assign Role</Label>
-                              <Select value={selectedRole} onValueChange={setSelectedRole} disabled={availableRoles.length === 0}>
-                                 <SelectTrigger className="w-full bg-slate-800 border-indigo-500/30">
-                                     <SelectValue placeholder="Select a role" />
-                                 </SelectTrigger>
-                                 <SelectContent className="bg-slate-800 text-white border-indigo-500/50">
-                                     {availableRoles.length === 0 && <SelectItem value="" disabled>No roles available</SelectItem>}
-                                     {availableRoles.map(role => (
-                                         <SelectItem key={role} value={role}>{role}</SelectItem>
-                                     ))}
-                                 </SelectContent>
-                             </Select>
-                        </div>
-                    </div>
-
-                     {/* Employee Details */}
-                     <h4 className="text-md font-semibold text-indigo-300 pt-2 border-t border-slate-700/50">Employee Profile</h4>
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                             <Label htmlFor="firstName" className="text-indigo-300">First Name</Label>
-                             <Input id="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="bg-slate-800 border-indigo-500/30" />
-                         </div>
-                         <div className="space-y-2">
-                             <Label htmlFor="lastName" className="text-indigo-300">Last Name</Label>
-                             <Input id="lastName" value={lastName} onChange={(e) => setLastName(e.target.value)} className="bg-slate-800 border-indigo-500/30" />
-                         </div>
-                     </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                         <div className="space-y-2">
-                             <Label htmlFor="designation" className="text-indigo-300">Designation</Label>
-                             <Input id="designation" value={designation} onChange={(e) => setDesignation(e.target.value)} className="bg-slate-800 border-indigo-500/30" />
-                         </div>
-                          <div className="space-y-2">
-                             <Label htmlFor="dailyRate" className="text-indigo-300">Daily Rate (₱)</Label>
-                             <Input id="dailyRate" type="number" min="0" value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} className="bg-slate-800 border-indigo-500/30" />
-                         </div>
-                         {/* Add Department, Contact fields here if needed */}
-                     </div>
-
-                    {/* Project Assignment (Conditional) */}
-                    {selectedRole === 'Field Employee' && (
-                        <div className="space-y-2">
-                            <Label htmlFor="project" className="text-indigo-300">Assign to Project</Label>
-                             <Select value={selectedProjectId} onValueChange={setSelectedProjectId} disabled={projects.length === 0}>
-                                 <SelectTrigger className="w-full bg-slate-800 border-indigo-500/30">
-                                     <SelectValue placeholder="Select a project" />
-                                 </SelectTrigger>
-                                 <SelectContent className="bg-slate-800 text-white border-indigo-500/50">
-                                      {projects.length === 0 && <SelectItem value="" disabled>No projects available</SelectItem>}
-                                      {projects.map(p => (
-                                         <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                                     ))}
-                                 </SelectContent>
-                             </Select>
-                        </div>
-                    )}
-
-                    {/* Password */}
-                    <h4 className="text-md font-semibold text-indigo-300 pt-2 border-t border-slate-700/50">Set Initial Password</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="password" className="text-indigo-300">Password</Label>
-                            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="bg-slate-800 border-indigo-500/30" placeholder="Min. 6 characters" />
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="confirmPassword" className="text-indigo-300">Confirm Password</Label>
-                            <Input id="confirmPassword" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="bg-slate-800 border-indigo-500/30" placeholder="Re-enter password" />
-                        </div>
-                    </div>
-
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="firstName" className="text-indigo-300">First Name *</Label>
+                  <Input id="firstName" value={formData.firstName} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" required />
                 </div>
-                <Button onClick={handleCreate} disabled={isSubmitting} className="w-full bg-gradient-to-r from-green-600 to-emerald-600">
-                    {isSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
-                    {isSubmitting ? 'Creating User...' : 'Create User Account'}
-                </Button>
-            </DialogContent>
-        </Dialog>
-    );
+                <div className="space-y-2">
+                  <Label htmlFor="lastName" className="text-indigo-300">Last Name *</Label>
+                  <Input id="lastName" value={formData.lastName} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" required />
+                </div>
+              </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                   <div className="space-y-2">
+                     <Label htmlFor="designation" className="text-indigo-300">Designation *</Label>
+                     <Input id="designation" value={formData.designation} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" required />
+                   </div>
+                    <div className="space-y-2">
+                     <Label htmlFor="department" className="text-indigo-300">Department</Label>
+                     <Input id="department" value={formData.department} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" />
+                   </div>
+               </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div className="space-y-2">
+                   <Label htmlFor="contactNumber" className="text-indigo-300">Contact Number</Label>
+                   <Input id="contactNumber" value={formData.contactNumber} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" />
+                 </div>
+                 <div className="space-y-2">
+                  <Label htmlFor="dailyRate" className="text-indigo-300">Daily Rate (₱)</Label>
+                  <Input id="dailyRate" type="number" min="0" value={formData.dailyRate} onChange={handleInputChange} className="bg-slate-800 border-indigo-500/30" />
+                </div>
+              </div>
+
+              {/* Project Assignment (Conditional) */}
+              {formData.role === 'Field Employee' && (
+                <div className="space-y-2">
+                  <Label htmlFor="projectId" className="text-indigo-300">Assign to Project *</Label>
+                  <select id="projectId" value={formData.projectId} onChange={handleInputChange} className="w-full bg-slate-800 border border-indigo-500/30 rounded-md p-2 text-white h-10" required={formData.role === 'Field Employee'} disabled={!projects || projects.length === 0}>
+                    {(projects && projects.length > 0) ? (
+                      projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)
+                    ) : (
+                      <option value="">No projects available</option>
+                    )}
+                  </select>
+                </div>
+              )}
+          </div>
+          <Button type="submit" disabled={isLoading} className="w-full bg-gradient-to-r from-green-600 to-emerald-600">
+            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            {isLoading ? 'Creating User...' : 'Create User'}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 };
 
 export default CreateUserModal;
+
