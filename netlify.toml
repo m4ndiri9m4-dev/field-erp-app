@@ -1,19 +1,19 @@
 # Netlify Build Settings
 [build]
-  command = "npm run build" # Or "npm ci && npm run build"
-  publish = "dist"          # The folder Vite builds into
-  functions = "netlify/functions" # Where your Netlify function lives
+  command = "npm ci && npm run build" # Use the command that worked
+  publish = "dist"                  # Folder Vite builds into
+  functions = "netlify/functions"     # Where your Netlify function lives
 
-# Single Page App Rewrite Rule (Crucial Part)
+# Single Page App Rewrite Rule (This fixes the 404 errors)
 [[redirects]]
   from = "/*"
   to = "/index.html"
-  status = 200 # Serve index.html directly, not a 301/302 redirect
+  status = 200 # Important: Serve index.html, don't redirect browser
 ```
 
 **Next Steps:**
 
-1.  **Create the File:** In the root folder of your project (`C:\Users\m4ndi\field-erp.com`), create a new file named exactly `netlify.toml`.
+1.  **Create File:** In the root folder of your project (`C:\Users\m4ndi\field-erp.com`), create a new file named exactly `netlify.toml`.
 2.  **Add Code:** Copy the code from the file block above and paste it into your new `netlify.toml` file.
 3.  **Save** the file.
 4.  **Commit and Push:** Add this new file to Git, commit it, and push it to your repository:
