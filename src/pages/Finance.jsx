@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-// import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"; // *** REMOVED THIS LINE ***
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"; // *** RE-ADDED THIS LINE ***
 import {
   Table,
   TableBody,
@@ -501,6 +501,4 @@ const Finance = ({ user, onLogout, db, appId }) => {
 };
 
 export default Finance;
-
-
 
